@@ -1,4 +1,6 @@
 import torch
+from torch.utils.data import Dataset
+
 import numpy as np
 from scipy.spatial import Delaunay
 from scipy.spatial.distance import pdist
@@ -30,7 +32,7 @@ class TSP:
         return (d[:, 1:] - d[:, :-1]).norm(p=2, dim=2).sum(1) + (d[:, 0] - d[:, -1]).norm(p=2, dim=1)
 
     @staticmethod
-    def get_data_iterator(steps: int, batch_size: int, problem_size: int, need_dt: bool, data_path: str):
+    def get_train_data_iterator(steps: int, batch_size: int, problem_size: int, need_dt: bool, data_path: str):
         '''
         Return a TspDataIterator for training, check the param is valid or not
         '''
@@ -43,10 +45,21 @@ class TSP:
             assert data_path.endswith('.npz'), 'data file should be .npz'
             assert os.path.exists(data_path), 'data path {} not exists!'.format(data_path)
         return TspDataIterator(steps, batch_size, problem_size, need_dt, data_path)
+    @staticmethod
+    def get_eval_data_set(batch_size: int, data_path: str, need_dt: bool):
+        '''
+        Return a pytorch dataset from file 
+        '''
+        data = np.load(filename)['x'].astype(np.float32)  # open file at first
+        item = {'data': data}
+        if need_dt:
+            item['dt'] = dt_graph(data)
+        return TSPDataset(item)
+        
 
 class TspDataIterator:
     '''
-    Tsp data iterator for training/eval
+    Tsp data iterator for training, data is generated on the fly or sample from file with replacement
     '''
     def __init__(self, steps: int, batch_size: int, problem_size: int, need_dt: bool, data_path: str):
         self.steps = steps
@@ -114,6 +127,32 @@ class TspDataIterator:
         '''
         return steps
 
+class TSPDataset(Dataset):
+    def __init__(self, item: dict):
+        '''
+        Init a dataset
+
+        :param data: a dict contains 'data'->np.array, may contains dt graphs
+        '''
+        super().__init__()
+        self.item = item
+
+        self.len = len(self.item['data'])
+    def __len__(self):
+        return self.len
+    def __getitem__(self, idx):
+        ret = {}
+        for k in self.item.keys():
+            ret[k] = self.item[k][idx]
+        return ret
+
+
+
+
+
+'''
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~cross line~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+'''
 def data_generator(sub_pipe: Pipe, data_path: str, steps: int, batch_size: int, problem_size: int):
     '''
     For subprocess to dt computation, data can be from file or on the fly

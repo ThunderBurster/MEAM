@@ -10,7 +10,9 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
 import math
+import numpy as np
 import os
+from tqdm import tqdm
 
 from model.encoder import GraphAttentionEncoder, MultiHeadAttentionLayer
 
@@ -21,6 +23,11 @@ class MEAM(nn.Module):
     def __init__(self, hidden_size=128, encoder_layers=3, decoder_layers=2, \
         u_clip=10, n_heads=8, n_encoders=5, topk=0, need_dt=True):
         super().__init__()
+        # get model setting args
+        self.model_setting_dict = locals()
+        self.model_setting_dict.pop('self')
+        self.model_setting_dict.pop('__class__')
+
         # model setting from init parameters
         self.hidden_size = hidden_size
         self.encoder_layers = encoder_layers
@@ -137,42 +144,58 @@ class MEAM(nn.Module):
         first_step_probs = first_prob.reshape(self.n_encoders, B, n)
         return {'routes': route_record, 'probs': probs_record, 'first_step_prob': first_step_probs}
 
+
     # training funcs
     def train(self, problem_size=50, batch_size=512, epochs=100, steps_per_epoch=2500, lr=1e-4, \
-        max_grad_norm=1.0, eval_set_path='', train_name='default'):
-        # get args descrption, to write in the save
-        args_dict = locals()       
-
-        # get the train loader
-        eval_data_loader =  DataLoader(TSP.get_eval_data_set(eval_set_path, self.need_dt), batch_size=batch_size, shuffle=False)
+        kl_ratio=1e-2, max_grad_norm=1.0, eval_set_path='', train_name='default'):
+        # get local args at the every start, the func args
+        args_dict = locals()   
+        args_dict.pop('self')    
+        # get the eval loader by path
+        eval_data_loader = DataLoader(TSP.get_eval_data_set(eval_set_path, self.need_dt), batch_size=batch_size, shuffle=False)
         # train setting
         train_name = Utils.get_train_name_with_time(train_name)
         save_dir = os.path.join('save', 'tsp_{}'.format(problem_size), train_name)  # save/tsp_50/default
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
+        with open(os.path.join(save_dir, 'setting.txt'), 'w') as f:
+            # train setting
+            f.write('train settings:\n')
+            for k, v in args_dict.items():
+                f.write('{}:{}\n'.format(k, v))
+            # model setting
+            f.write('\nmodel settings:\n')
+            for k, v in self.model_setting_dict.items():
+                f.write('{}:{}\n'.format(k, v))
         
-        pass
+        # start training
+        if self.optimizer is None:
+            self.optimizer = optim.Adam(self.parameters(), lr=lr)
+        
+        for epoch in range(epochs):
+            print('training epoch {}/{}'.format(epoch+1, epochs))
+            self.cuda()
+            self.train()
+            train_iterator = TSP.get_train_data_iterator(steps_per_epoch, batch_size, problem_size, self.need_dt, None)
+            train_iterator.reset()
+            for item in tqdm(train_iterator, unit='step', desc='epoch {}'.format(epoch)):
+                data = torch.from_numpy(item['data']).cuda()
+                dt = torch.from_numpy(item['dt']) if self.need_dt else None
+                return_dict = self(x_all, dt, 'sample')
+                # all of size ways * B * n
+                routes, probs, first_step_prob = return_dict['routes'], return_dict['probs'], return_dict['first_step_prob']
+                # greedy baseline
+                with torch.no_grad():
+                    return_dict_ = self(x_all, dt, 'greedy')
+                    routes_ = return_dict_['routes']
+                # loss, backward, clip, step
 
-    def train_epoch(self):
-        '''
-        Train an epoch, eval and save at last
-        '''
-        pass
-    def train_batch(self):
-        '''
-        Train a batch
-        '''
-        pass
+                # to do to do to do
     
     # utils function of this model
     def save_or_load(self):
         '''
         save or load model and optimizer
-        '''
-        pass
-    def get_model_setting_str(self):
-        '''
-        get str of model setting description
         '''
         pass
 

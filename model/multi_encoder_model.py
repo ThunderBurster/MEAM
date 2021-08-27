@@ -7,15 +7,19 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+from torch.utils.data import Dataset, DataLoader
+
 import math
+import os
 
 from model.encoder import GraphAttentionEncoder, MultiHeadAttentionLayer
 
+from utils import TSP, Utils
 
 
 class MEAM(nn.Module):
     def __init__(self, hidden_size=128, encoder_layers=3, decoder_layers=2, \
-        u_clip=10, n_heads=8, n_encoders=5, topk=0):
+        u_clip=10, n_heads=8, n_encoders=5, topk=0, need_dt=True):
         super().__init__()
         # model setting from init parameters
         self.hidden_size = hidden_size
@@ -25,6 +29,7 @@ class MEAM(nn.Module):
         self.n_heads = n_heads
         self.n_encoders = n_encoders
         self.topk = topk  # topk self action mask, >0 valid
+        self.need_dt = need_dt
 
         # model parameters
         # multi-encoders
@@ -65,7 +70,7 @@ class MEAM(nn.Module):
         :param x_all: float tensor of size B * n * 2
         :param dt_graph: float tensor of size B * n * n, maybe none
         :param decode_type: str sample or greedy
-        :returns: a dict {route, probs, first_probs}
+        :returns: a dict {routes, probs, first_step_prob}, all tensor of shape ways * B * n
         '''
         B, n, _ = x_all.shape
         EB = B * self.n_encoders
@@ -127,25 +132,25 @@ class MEAM(nn.Module):
             des_embedding, cur_embedding = node_embeddings[list(range(EB)), des_idx], node_embeddings[list(range(EB)), cur_idx]
             des_cur_embedding = torch.stack([des_embedding, cur_embedding], 1)
         # decode done, return dict of route, probs, first probs dist
-        # route: ways * B * n
-        # probs: ways * B * n
-        # first probs: list of len ways, each tensor of size B*n
-        # to do
-                
+        route_record = torch.stack(route_record, 1).reshape(self.n_encoders, B, n)
+        probs_record = torch.stack(probs_record, 1).reshape(self.n_encoders, B, n)
+        first_step_probs = first_prob.reshape(self.n_encoders, B, n)
+        return {'routes': route_record, 'probs': probs_record, 'first_step_prob': first_step_probs}
 
-                
+    # training funcs
+    def train(self, problem_size=50, batch_size=512, epochs=100, steps_per_epoch=2500, lr=1e-4, \
+        max_grad_norm=1.0, eval_set_path='', train_name='default'):
+        # get args descrption, to write in the save
+        args_dict = locals()       
 
-
-
-
-
-
+        # get the train loader
+        eval_data_loader =  DataLoader(TSP.get_eval_data_set(eval_set_path, self.need_dt), batch_size=batch_size, shuffle=False)
+        # train setting
+        train_name = Utils.get_train_name_with_time(train_name)
+        save_dir = os.path.join('save', 'tsp_{}'.format(problem_size), train_name)  # save/tsp_50/default
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
         
-
-
-        pass
-
-    def train(self):
         pass
 
     def train_epoch(self):
@@ -160,12 +165,19 @@ class MEAM(nn.Module):
         pass
     
     # utils function of this model
-    def save_self(self):
+    def save_or_load(self):
         '''
-        save model and optimizer
+        save or load model and optimizer
+        '''
+        pass
+    def get_model_setting_str(self):
+        '''
+        get str of model setting description
         '''
         pass
 
+    
+    # computation funcs
     @staticmethod
     def mha(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, mask: torch.Tensor=None, n_heads=8):
         '''
@@ -193,6 +205,7 @@ class MEAM(nn.Module):
         value = value.reshape(B, nk, n_heads, -1).permute(0, 2, 1, 3)  # batch * heads * nk * hidden
         value_return = torch.matmul(attn, value)  # batch * heads * nq * hidden
         return value_return.transpose(1, 2).reshape(B, nq, hidden)
+
     @staticmethod
     def position_encoding_init(n_position: int, emb_dim: int) -> torch.Tensor:
         # return pos embedding of shape [n, hidden]

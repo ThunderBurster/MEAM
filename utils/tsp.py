@@ -46,11 +46,11 @@ class TSP:
             assert os.path.exists(data_path), 'data path {} not exists!'.format(data_path)
         return TspDataIterator(steps, batch_size, problem_size, need_dt, data_path)
     @staticmethod
-    def get_eval_data_set(batch_size: int, data_path: str, need_dt: bool):
+    def get_eval_data_set(data_path: str, need_dt: bool):
         '''
         Return a pytorch dataset from file 
         '''
-        data = np.load(filename)['x'].astype(np.float32)  # open file at first
+        data = np.load(data_path)['x'].astype(np.float32)  # open file at first
         item = {'data': data}
         if need_dt:
             item['dt'] = dt_graph(data)

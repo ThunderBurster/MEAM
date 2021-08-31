@@ -12,6 +12,7 @@ from torch.utils.data import Dataset, DataLoader
 import math
 import numpy as np
 import os
+import copy
 from tqdm import tqdm
 
 from model.encoder import GraphAttentionEncoder, MultiHeadAttentionLayer
@@ -109,7 +110,7 @@ class MEAM(nn.Module):
                 # self attn then glimpse
                 des_cur_embedding = self.self_attn_decoder_layers[i](des_cur_embedding, None)
                 des_cur_embedding = MEAM.mha(des_cur_embedding, glimpse_keys_list[i], glimpse_values_list[i], mask, self.n_heads)
-                des_cur_embedding = self.glimpseVOut(des_cur_embedding)
+                des_cur_embedding = self.glimpseVOut[i](des_cur_embedding)
             # compute the probs
             prob_query = self.probQ(des_cur_embedding.sum(1, keepdim=True))  # EB * 1 * hidden, then prob_key is EB * n * hidden
             prob_u = torch.matmul(prob_query, prob_key.transpose(1, 2)).squeeze(1) / math.sqrt(self.hidden_size)  # EB * n
@@ -119,7 +120,7 @@ class MEAM(nn.Module):
                 # topk after mask the visited, the first step never topk as kl_loss 
                 topkIdx = torch.topk(masked_u, self.topk, 1)[1]  # EB * k
                 topk_mask = torch.zeros(EB, n).to(node_embeddings.device)
-                topk_mask[torch.arange(EB).expand(EB, k), topkIdx] = 1
+                topk_mask[torch.arange(EB).unsqueeze(1).expand(EB, self.topk), topkIdx] = 1
                 masked_u = prob_u + (mask * topk_mask).log()
             probs = masked_u.softmax(-1)
             # then decode, idx of shape EB
@@ -138,6 +139,7 @@ class MEAM(nn.Module):
             des_idx, cur_idx = route_record[0], route_record[-1]
             des_embedding, cur_embedding = node_embeddings[list(range(EB)), des_idx], node_embeddings[list(range(EB)), cur_idx]
             des_cur_embedding = torch.stack([des_embedding, cur_embedding], 1)
+            mask[list(range(EB)), idx] = 0
         # decode done, return dict of route, probs, first probs dist
         route_record = torch.stack(route_record, 1).reshape(self.n_encoders, B, n)
         probs_record = torch.stack(probs_record, 1).reshape(self.n_encoders, B, n)
@@ -146,13 +148,14 @@ class MEAM(nn.Module):
 
 
     # training funcs
-    def train(self, problem_size=50, batch_size=512, epochs=100, steps_per_epoch=2500, lr=1e-4, \
+    def train_self(self, problem_size=50, batch_size=512, epochs=100, steps_per_epoch=2500, lr=1e-4, \
         kl_ratio=1e-2, max_grad_norm=1.0, eval_set_path='', train_name='default'):
         # get local args at the every start, the func args
-        args_dict = locals()   
+        args_dict = locals()  
         args_dict.pop('self')    
         # get the eval loader by path
-        eval_data_loader = DataLoader(TSP.get_eval_data_set(eval_set_path, self.need_dt), batch_size=batch_size, shuffle=False)
+        eval_data_set = TSP.get_eval_data_set(eval_set_path, self.need_dt)
+        eval_data_loader = DataLoader(eval_data_set, batch_size=batch_size, shuffle=False)
         # train setting
         train_name = Utils.get_train_name_with_time(train_name)
         save_dir = os.path.join('save', 'tsp_{}'.format(problem_size), train_name)  # save/tsp_50/default
@@ -197,15 +200,15 @@ class MEAM(nn.Module):
         Train a batch, a forward and backward
         '''
         data = torch.from_numpy(item['data']).cuda()
-        dt = torch.from_numpy(item['dt']) if self.need_dt else None
-        return_dict = self(x_all, dt, 'sample')
+        dt = torch.from_numpy(item['dt']).cuda() if self.need_dt else None
+        return_dict = self(data, dt_graph=dt, decode_type='sample')
         # all of size ways * B * n
         routes, probs, first_step_prob = return_dict['routes'], return_dict['probs'], return_dict['first_step_prob']
         ways, B, n = routes.shape
         cost = TSP.compute_cost(data.expand(ways, B, n, 2).reshape(-1, n, 2), routes.reshape(-1, n)).reshape(ways, B)
         # greedy baseline
         with torch.no_grad():
-            return_dict_ = self(x_all, dt, 'greedy')
+            return_dict_ = self(data, dt_graph=dt, decode_type='greedy')
             routes_ = return_dict_['routes']
             cost_ = TSP.compute_cost(data.expand(ways, B, n, 2).reshape(-1, n, 2), routes_.reshape(-1, n)).reshape(ways, B)
         # loss(RL and KL loss), backward, clip grad norm, step
@@ -221,7 +224,8 @@ class MEAM(nn.Module):
                 count += 1
                 first_probs_i, first_probs_j = first_step_prob[i], first_step_prob[j]  # B * n
                 kl_loss = kl_loss + torch.mean(torch.sum(first_probs_i * (first_probs_i.log() - first_probs_j.log()), -1))
-        kl_loss = kl_loss / count
+        if count != 0:
+            kl_loss = kl_loss / count
 
         loss = rl_loss + kl_ratio * kl_loss
         self.optimizer.zero_grad()
@@ -258,12 +262,14 @@ class MEAM(nn.Module):
 
         :returns: a cost tensor of size ways * N, N is the number of instances
         '''
+        self.eval()
         cost_record = []
         with torch.no_grad():
             for item in tqdm(eval_data_loader, unit='batch', desc='eval'):
-                data = torch.from_numpy(item['data']).cuda()
-                dt = torch.from_numpy(item['dt']) if self.need_dt else None
-                return_dict = self(x_all, dt, 'greedy')
+                # note: this has been converted to tensor by dataloader...
+                data = item['data'].cuda()
+                dt = item['dt'].cuda() if self.need_dt else None
+                return_dict = self(data, dt_graph=dt, decode_type='greedy')
                 routes = return_dict['routes']
                 ways, B, n = routes.shape
 

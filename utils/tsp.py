@@ -7,8 +7,8 @@ from scipy.spatial.distance import pdist
 from scipy.spatial.distance import squareform
 
 import os
-import torch.multiprocessing as mp
-from torch.multiprocessing import Queue, Lock, Pipe
+import multiprocessing as mp
+from multiprocessing import Queue, Lock, Pipe
 
 class TSP:
     @staticmethod
@@ -92,7 +92,8 @@ class TspDataIterator:
             if self.data_path is not None:
                 self.data = np.load(filename)['x'].astype(np.float32)
         
-
+    def __iter__(self):
+        return self
 
     def __next__(self) -> dict:
         '''
@@ -125,7 +126,7 @@ class TspDataIterator:
         '''
         Return len for tqdm
         '''
-        return steps
+        return self.steps
 
 class TSPDataset(Dataset):
     def __init__(self, item: dict):

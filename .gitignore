@@ -3,3 +3,4 @@ easy_run.py
 
 __pycache__
 *.npz
+save

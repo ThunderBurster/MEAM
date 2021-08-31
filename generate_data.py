@@ -19,6 +19,9 @@ if __name__ == '__main__':
 
     rng = np.random.RandomState(seed)
     x = rng.rand(val_size, problem_size, 2)
+
+    if not os.path.exists('data'):
+        os.makedirs('data')
     save_path = 'tsp{}_size{}_seed{}.npz'.format(problem_size, val_size, seed)
     save_path = os.path.join('data', save_path)
     np.savez(save_path, x=x)

@@ -179,25 +179,103 @@ class MEAM(nn.Module):
             train_iterator = TSP.get_train_data_iterator(steps_per_epoch, batch_size, problem_size, self.need_dt, None)
             train_iterator.reset()
             for item in tqdm(train_iterator, unit='step', desc='epoch {}'.format(epoch)):
-                data = torch.from_numpy(item['data']).cuda()
-                dt = torch.from_numpy(item['dt']) if self.need_dt else None
-                return_dict = self(x_all, dt, 'sample')
-                # all of size ways * B * n
-                routes, probs, first_step_prob = return_dict['routes'], return_dict['probs'], return_dict['first_step_prob']
-                # greedy baseline
-                with torch.no_grad():
-                    return_dict_ = self(x_all, dt, 'greedy')
-                    routes_ = return_dict_['routes']
-                # loss, backward, clip, step
+                self.train_batch(item, kl_ratio, max_grad_norm)
+            # now end of an epoch, do eval and save
+            eval_cost_ways = self.greedy_eval(eval_data_loader)  # ways * N
+            eval_cost = eval_cost_ways.min(0)[0]
 
-                # to do to do to do
+            model_path = os.path.join(save_dir, 'actor-{}.pt'.format(epoch))
+            record_path = os.path.join(save_dir, 'record.txt')
+            with open(record_path, 'a') as f:
+                f.write('epoch {}, validating result on {} samples: {}\n'.format(epoch, len(eval_cost), eval_cost.mean().item()))
+            self.save_or_load(True, model_path)
+        
+
     
+    def train_batch(self, item: dict, kl_ratio: float, max_grad_norm: float):
+        '''
+        Train a batch, a forward and backward
+        '''
+        data = torch.from_numpy(item['data']).cuda()
+        dt = torch.from_numpy(item['dt']) if self.need_dt else None
+        return_dict = self(x_all, dt, 'sample')
+        # all of size ways * B * n
+        routes, probs, first_step_prob = return_dict['routes'], return_dict['probs'], return_dict['first_step_prob']
+        ways, B, n = routes.shape
+        cost = TSP.compute_cost(data.expand(ways, B, n, 2).reshape(-1, n, 2), routes.reshape(-1, n)).reshape(ways, B)
+        # greedy baseline
+        with torch.no_grad():
+            return_dict_ = self(x_all, dt, 'greedy')
+            routes_ = return_dict_['routes']
+            cost_ = TSP.compute_cost(data.expand(ways, B, n, 2).reshape(-1, n, 2), routes_.reshape(-1, n)).reshape(ways, B)
+        # loss(RL and KL loss), backward, clip grad norm, step
+        rl_loss = torch.mean((cost - cost_).detach() * probs.log().sum(-1))
+
+        kl_loss = 0
+        count = 0
+        for i in range(self.n_encoders):
+            for j in range(self.n_encoders):
+                # kl loss loop, ways
+                if i == j:
+                    continue
+                count += 1
+                first_probs_i, first_probs_j = first_step_prob[i], first_step_prob[j]  # B * n
+                kl_loss = kl_loss + torch.mean(torch.sum(first_probs_i * (first_probs_i.log() - first_probs_j.log()), -1))
+        kl_loss = kl_loss / count
+
+        loss = rl_loss + kl_ratio * kl_loss
+        self.optimizer.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_(self.parameters(), max_grad_norm, norm_type=2)
+        self.optimizer.step()
+
+
+
     # utils function of this model
-    def save_or_load(self):
+    def save_or_load(self, save: bool, path: str):
         '''
         save or load model and optimizer
+
+        :param save: True for save, False for load
+        :param path: save or load model path
         '''
-        pass
+        if save:
+            save_dict = {
+                'model': self.state_dict(),
+                'optimizer': self.optimizer.state_dict()
+            }
+            torch.save(save_dict, path)
+        else:
+            load_dict = torch.load(path)
+            self.load_state_dict(load_dict['model'])
+            self.optimizer.load_state_dict(load_dict['optimizer'])
+
+    def greedy_eval(self, eval_data_loader: DataLoader) -> torch.Tensor:
+        '''
+        Eval greedy decode of this model
+
+        :param eval_data_loader: get it by call TSP.get_eval_data_set() then warped with dataloader, see code for details
+
+        :returns: a cost tensor of size ways * N, N is the number of instances
+        '''
+        cost_record = []
+        with torch.no_grad():
+            for item in tqdm(eval_data_loader, unit='batch', desc='eval'):
+                data = torch.from_numpy(item['data']).cuda()
+                dt = torch.from_numpy(item['dt']) if self.need_dt else None
+                return_dict = self(x_all, dt, 'greedy')
+                routes = return_dict['routes']
+                ways, B, n = routes.shape
+
+                cost = TSP.compute_cost(data.expand(ways, B, n, 2).reshape(-1, n, 2), routes.reshape(-1, n)).reshape(ways, B)
+                cost_record.append(cost)
+        return torch.cat(cost_record, 1)
+
+
+
+
+
+
 
     
     # computation funcs

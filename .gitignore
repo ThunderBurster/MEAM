@@ -1,3 +1,5 @@
 debug.py
 easy_run.py
+
 __pycache__
+*.npz

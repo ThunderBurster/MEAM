@@ -15,7 +15,7 @@ import os
 import copy
 from tqdm import tqdm
 
-from model.encoder import GraphAttentionEncoder, MultiHeadAttentionLayer
+from model.encoder import GraphAttentionEncoder, MultiHeadAttention
 
 from utils import TSP, Utils
 
@@ -60,8 +60,27 @@ class MEAM(nn.Module):
             [nn.Linear(self.hidden_size, self.hidden_size, False) for _ in range(self.decoder_layers)]
         )
         self.self_attn_decoder_layers = nn.ModuleList(
-            [MultiHeadAttentionLayer(self.n_heads, self.hidden_size, 4 * self.hidden_size, 'instance') for _ in range(self.decoder_layers)]
+            [MultiHeadAttention(self.n_heads, self.hidden_size, self.hidden_size) for _ in range(self.decoder_layers)]
         )
+        self.FF = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(self.hidden_size, 4 * self.hidden_size),
+                    nn.ReLU(),
+                    nn.Linear(4 * self.hidden_size, self.hidden_size)
+                ) for _ in range(self.decoder_layers)
+            ]
+        )
+        self.IN0 = nn.ModuleList(
+            [nn.InstanceNorm1d(self.hidden_size) for _ in range(self.decoder_layers)]
+        )
+        self.IN1 = nn.ModuleList(
+            [nn.InstanceNorm1d(self.hidden_size) for _ in range(self.decoder_layers)]
+        )
+        self.IN2 = nn.ModuleList(
+            [nn.InstanceNorm1d(self.hidden_size) for _ in range(self.decoder_layers)]
+        )
+        
         # probs
         self.probQ = nn.Linear(self.hidden_size, self.hidden_size, False)
         self.probK = nn.Linear(self.hidden_size, self.hidden_size, False)
@@ -104,15 +123,20 @@ class MEAM(nn.Module):
         probs_record = []
         first_prob = None
         for step in range(n):
-            # add pos embedding at first
-            des_cur_embedding = des_cur_embedding + pos_embedding
+            # des and cur can exchange!
             for i in range(self.decoder_layers):
-                # self attn then glimpse
-                des_cur_embedding = self.self_attn_decoder_layers[i](des_cur_embedding, None)
-                des_cur_embedding = MEAM.mha(des_cur_embedding, glimpse_keys_list[i], glimpse_values_list[i], mask, self.n_heads)
-                des_cur_embedding = self.glimpseVOut[i](des_cur_embedding)
-            # compute the probs
-            prob_query = self.probQ(des_cur_embedding.sum(1, keepdim=True))  # EB * 1 * hidden, then prob_key is EB * n * hidden
+                # skip glimpse unvisited and IN
+                des_cur_embedding = des_cur_embedding + \
+                    self.glimpseVOut[i](MEAM.mha(self.glimpseQ[i](des_cur_embedding), glimpse_keys_list[i], glimpse_values_list[i], mask, self.n_heads))
+                des_cur_embedding = self.IN0[i](des_cur_embedding)
+                # skip self attn and IN
+                des_cur_embedding = des_cur_embedding + self.self_attn_decoder_layers[i](des_cur_embedding, None)
+                des_cur_embedding = self.IN1[i](des_cur_embedding)
+                # skip FF and IN
+                des_cur_embedding = des_cur_embedding + self.FF[i](des_cur_embedding)
+                des_cur_embedding = self.IN2[i](des_cur_embedding)
+            # compute the probs, query only by cur
+            prob_query = self.probQ(des_cur_embedding[:, 1, :].reshape(EB, 1, self.hidden_size))  # EB * 1 * hidden, then prob_key is EB * n * hidden
             prob_u = torch.matmul(prob_query, prob_key.transpose(1, 2)).squeeze(1) / math.sqrt(self.hidden_size)  # EB * n
             prob_u = self.u_clip * prob_u.tanh()  # clip first, then mask
             masked_u = prob_u + mask.log()  # apply visited action mask first

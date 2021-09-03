@@ -21,7 +21,7 @@ from utils import TSP, Utils
 
 
 class MEAM(nn.Module):
-    def __init__(self, hidden_size=128, encoder_layers=3, decoder_layers=2, \
+    def __init__(self, hidden_size=128, encoder_layers=3, decoder_layers=2, u0_clip=10, \
         u_clip=10, n_heads=8, n_encoders=5, topk=0, need_dt=True):
         super().__init__()
         # get model setting args
@@ -33,6 +33,7 @@ class MEAM(nn.Module):
         self.hidden_size = hidden_size
         self.encoder_layers = encoder_layers
         self.decoder_layers = decoder_layers
+        self.u0_clip = u0_clip
         self.u_clip = u_clip
         self.n_heads = n_heads
         self.n_encoders = n_encoders
@@ -71,15 +72,6 @@ class MEAM(nn.Module):
                 ) for _ in range(self.decoder_layers)
             ]
         )
-        self.IN0 = nn.ModuleList(
-            [nn.InstanceNorm1d(self.hidden_size) for _ in range(self.decoder_layers)]
-        )
-        self.IN1 = nn.ModuleList(
-            [nn.InstanceNorm1d(self.hidden_size) for _ in range(self.decoder_layers)]
-        )
-        self.IN2 = nn.ModuleList(
-            [nn.InstanceNorm1d(self.hidden_size) for _ in range(self.decoder_layers)]
-        )
         
         # probs
         self.probQ = nn.Linear(self.hidden_size, self.hidden_size, False)
@@ -87,8 +79,6 @@ class MEAM(nn.Module):
         
         # optimizer, create one at first train or load from state dict
         self.optimizer = None
-        # pos
-        self.pos_embedding = MEAM.position_encoding_init(2, self.hidden_size)
         
     def forward(self, x_all: torch.Tensor, dt_graph: torch.Tensor=None, decode_type='sample'):
         '''
@@ -117,7 +107,6 @@ class MEAM(nn.Module):
         prob_key = self.probK(node_embeddings)
         # then forward all the way! batch expand to be EB
         mask = torch.ones(EB, n).to(node_embeddings.device)
-        pos_embedding = self.pos_embedding.to(node_embeddings.device).expand(EB, -1, -1)  # EB * 2 * hidden
         des_cur_embedding = torch.stack([self.des_holder.expand(EB, -1), self.cur_holder.expand(EB, -1)], 1)  # EB * 2 * hidden
         route_record = []
         probs_record = []
@@ -125,20 +114,17 @@ class MEAM(nn.Module):
         for step in range(n):
             # des and cur can exchange!
             for i in range(self.decoder_layers):
-                # skip glimpse unvisited and IN
+                # skip glimpse unvisited
                 des_cur_embedding = des_cur_embedding + \
                     self.glimpseVOut[i](MEAM.mha(self.glimpseQ[i](des_cur_embedding), glimpse_keys_list[i], glimpse_values_list[i], mask, self.n_heads))
-                des_cur_embedding = self.IN0[i](des_cur_embedding)
-                # skip self attn and IN
+                # skip self attn
                 des_cur_embedding = des_cur_embedding + self.self_attn_decoder_layers[i](des_cur_embedding, None)
-                des_cur_embedding = self.IN1[i](des_cur_embedding)
                 # skip FF and IN
                 des_cur_embedding = des_cur_embedding + self.FF[i](des_cur_embedding)
-                des_cur_embedding = self.IN2[i](des_cur_embedding)
             # compute the probs, query only by cur
             prob_query = self.probQ(des_cur_embedding[:, 1, :].reshape(EB, 1, self.hidden_size))  # EB * 1 * hidden, then prob_key is EB * n * hidden
             prob_u = torch.matmul(prob_query, prob_key.transpose(1, 2)).squeeze(1) / math.sqrt(self.hidden_size)  # EB * n
-            prob_u = self.u_clip * prob_u.tanh()  # clip first, then mask
+            prob_u = (self.u0_clip if step==0 else self.u_clip) * prob_u.tanh()  # clip first, then mask
             masked_u = prob_u + mask.log()  # apply visited action mask first
             if step>0 and self.topk > 0:
                 # topk after mask the visited, the first step never topk as kl_loss 

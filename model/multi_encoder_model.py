@@ -135,7 +135,12 @@ class MEAM(nn.Module):
             probs = masked_u.softmax(-1)
             # then decode, idx of shape EB
             if decode_type == 'sample':
+                # note: multinomial can go wrong, selecting 0.0 due to bug on gpu
+                # not happen very frequently
                 idx = torch.multinomial(probs, 1).view(-1)
+                while (mask[list(range(EB)), idx] == 0.0).any():
+                    idx = torch.multinomial(probs, 1).view(-1)
+
             elif decode_type == 'greedy':
                 idx = torch.argmax(probs, 1).view(-1)
             else:

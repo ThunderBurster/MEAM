@@ -1,1 +1,2 @@
 from model.multi_encoder_model import MEAM
+from model.multi_encoder_model_am import MEAM_AMDECODER

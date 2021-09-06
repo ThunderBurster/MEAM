@@ -45,8 +45,9 @@ class MEAM_AMDECODER(nn.Module):
             [GraphAttentionEncoder(self.n_heads, self.hidden_size, self.encoder_layers, 2, 'batch', 4 * self.hidden_size) for _ in range(self.n_encoders)]
         )
         # glimpse + self attn decoders 
-        self.cur_holder = nn.Parameter(torch.Tensor(self.hidden_size))
-        self.des_holder = nn.Parameter(torch.Tensor(self.hidden_size))
+        stdv = 1.0 / math.sqrt(self.hidden_size)
+        self.cur_holder = nn.Parameter(torch.Tensor(self.hidden_size).uniform_(-stdv, stdv))
+        self.des_holder = nn.Parameter(torch.Tensor(self.hidden_size).uniform_(-stdv, stdv))
         self.glimpseQ = nn.Linear(3 * self.hidden_size, self.hidden_size, False)
         self.glimpseK = nn.Linear(self.hidden_size, self.hidden_size, False)
         self.glimpseV = nn.Linear(self.hidden_size, self.hidden_size, False)

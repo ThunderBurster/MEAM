@@ -5,3 +5,4 @@ am_easy_run.py
 __pycache__
 *.npz
 save
+save_am_decoder

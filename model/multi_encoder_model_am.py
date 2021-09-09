@@ -45,10 +45,9 @@ class MEAM_AMDECODER(nn.Module):
             [GraphAttentionEncoder(self.n_heads, self.hidden_size, self.encoder_layers, 2, 'batch', 4 * self.hidden_size) for _ in range(self.n_encoders)]
         )
         # glimpse + self attn decoders 
-        stdv = 1.0 / math.sqrt(self.hidden_size)
-        self.cur_holder = nn.Parameter(torch.Tensor(self.hidden_size).uniform_(-stdv, stdv))
-        self.des_holder = nn.Parameter(torch.Tensor(self.hidden_size).uniform_(-stdv, stdv))
-        self.glimpseQ = nn.Linear(2 * self.hidden_size, self.hidden_size, False)
+        self.cur_holder = nn.Parameter(torch.Tensor(self.hidden_size).uniform_(-1, 1))
+        self.des_holder = nn.Parameter(torch.Tensor(self.hidden_size).uniform_(-1, 1))
+        self.glimpseQ = nn.Linear(3 * self.hidden_size, self.hidden_size, False)
         self.glimpseK = nn.Linear(self.hidden_size, self.hidden_size, False)
         self.glimpseV = nn.Linear(self.hidden_size, self.hidden_size, False)
         self.glimpseVOut = nn.Linear(self.hidden_size, self.hidden_size, False)
@@ -86,9 +85,10 @@ class MEAM_AMDECODER(nn.Module):
         route_record = []
         probs_record = []
         first_prob = None
+        graph_embedding = node_embeddings.mean(1)
         for step in range(n):
             # des and cur can exchange!
-            h = torch.cat([des_embedding, cur_embedding], 1).unsqueeze(1)  # EB * 1 * 2hidden
+            h = torch.cat([graph_embedding, des_embedding, cur_embedding], 1).unsqueeze(1)  # EB * 1 * 2hidden
             h = self.glimpseVOut(MEAM_AMDECODER.mha(self.glimpseQ(h), glimpse_keys, glimpse_values, mask, self.n_heads))  # EB * 1 * hidden
             # compute the probs, query only by cur
             prob_query = self.probQ(h)  # EB * 1 * hidden, then prob_key is EB * n * hidden

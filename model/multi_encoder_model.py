@@ -128,10 +128,10 @@ class MEAM(nn.Module):
             masked_u = prob_u + mask.log()  # apply visited action mask first
             if step>0 and self.topk > 0:
                 # topk after mask the visited, the first step never topk as kl_loss 
-                topkIdx = torch.topk(masked_u, self.topk, 1)[1]  # EB * k
-                topk_mask = torch.zeros(EB, n).to(node_embeddings.device)
+                topkIdx = torch.topk(masked_u, self.topk, 1, largest=True, sorted=False)[1]  # EB * k
+                topk_mask = torch.zeros(EB, n, device=node_embeddings.device)
                 topk_mask[torch.arange(EB).unsqueeze(1).expand(EB, self.topk), topkIdx] = 1
-                masked_u = prob_u + (mask * topk_mask).log()
+                masked_u = masked_u + topk_mask.log()
             probs = masked_u.softmax(-1)
             # then decode, idx of shape EB
             if decode_type == 'sample':

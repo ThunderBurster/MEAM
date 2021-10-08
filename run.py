@@ -5,6 +5,7 @@ from model import MEAM, MEAM_AMDECODER
 from utils import TSP
 
 import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

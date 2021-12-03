@@ -7,6 +7,16 @@ from utils import TSP
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # model settings
@@ -18,8 +28,8 @@ if __name__ == '__main__':
     parser.add_argument('--n_heads', type=int, default=8, help='heads for multi-head')
     parser.add_argument('--n_encoders', type=int, default=5, help='number of encoders')
     parser.add_argument('--topk', type=int, default=5, help='topk action mask')
-    parser.add_argument('--need_dt', type=bool, default=True, help='use dt or not')
-    parser.add_argument('--am_decoder', type=bool, default=False, help='use am deocder')
+    parser.add_argument('--need_dt', type=str2bool, default=True, help='use dt or not')
+    parser.add_argument('--am_decoder', type=str2bool, default=False, help='use am deocder')
     # training settings
     parser.add_argument('--problem_size', type=int, default=20, help='problem size of tsp')
     parser.add_argument('--batch_size', type=int, default=256, help='batch size for training')
